@@ -190,6 +190,10 @@ class BinaryStruct{
 				subObj.bufferAccess = {first: subObj.currentBuffer, last: subObj.currentBuffer};
 				subObj.$struct = this.$struct;
 				const value = subObj.read(Array.isArray(size.nest[fieldProp.f]) ? size.nest[fieldProp.f][0] : size.nest[fieldProp.f], true);
+				if(value == null){
+					callProp.abort = true;
+					return;
+				}
 				offset += subObj.ptr;
 				cur.ptr += subObj.ptr;
 				if(i == null){
@@ -205,6 +209,9 @@ class BinaryStruct{
 		for(let fieldProp of queue){
 			if(fieldProp.t == null){
 				fieldTask(fieldProp, null);
+				if(callProp.abort){
+					break;
+				}
 			}else{
 				const times = (typeof fieldProp.t == "number") ? fieldProp.t : handler.get(callProp = genProp(fieldProp.t, null), ...args);
 				if(callProp.abort){
@@ -227,7 +234,7 @@ class BinaryStruct{
 		}else{
 			this.ptr += offset;
 		}
-		return returnValue ? data : this;
+		return returnValue ? (callProp.abort ? null : data) : this;
 	}
 	write(name, data = null){
 		const {queue, size, handler, args} = this.$struct[name];
@@ -405,7 +412,7 @@ class BinaryStruct{
 				let n = (typeof size.nest[field][1] == "number") ? size.nest[field][1] : handler.get({
 					prop: size.nest[field][1],
 					data: data,
-					index: index,
+					index: null,
 					ptr: this.ptr,
 					curPtr: 0,
 					offset: 0,
