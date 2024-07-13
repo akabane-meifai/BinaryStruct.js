@@ -133,87 +133,94 @@ class BinaryStruct{
 		}
 		return this;
 	}
-	as(name, handler, ...args){
-		if(!("get" in handler)){
-			handler.get = prop => Array.isArray(prop.data[prop.prop]) ? prop.data[prop.prop][prop.index] : prop.data[prop.prop];
-		}
-		if(!("set" in handler)){
-			handler.set = prop => (prop.index == null) ? prop.data[prop.prop] : prop.data[prop.prop][prop.index];
-		}
+	as(name, context, handler){
 		this.$struct[name] = {
 			queue: this.$queue,
 			size: this.$size,
 			handler: handler,
-			args: args
+			context: context
 		};
 		this.$queue = [];
 		this.$size = {const: 0, variables: [], nest: {}};
 		return this;
 	}
-	read(name, returnValue = false){
-		const {queue, size, handler, args} = this.$struct[name];
+	test(name, data = null){
+		const returnValue = (data == null);
 		const cur = this.currentView;
-		const data = {};
+		const start = cur.view.byteOffset + cur.ptr;
+		const subBuffer = cur.view.buffer.slice(start, cur.view.buffer.byteLength);
+		const subObj = new BinaryStruct();
+		if(returnValue){
+			data = {};
+		}
+		subObj.currentBuffer = {buffer: this.currentBuffer.buffer, next: null, prev: null};
+		subObj.currentView = {view: new DataView(subObj.currentBuffer.buffer, start), ptr: 0};
+		subObj.bufferAccess = {first: subObj.currentBuffer, last: subObj.currentBuffer};
+		subObj.$struct = this.$struct;
+		subObj.read(name, data);
+		return returnValue ? data : this;
+	}
+	read(name, data = null){
+		const {queue, size, handler, context} = this.$struct[name];
+		const cur = this.currentView;
 		const ptr = cur.ptr;
-		let offset = 0;
-		let callProp = {abort: false};
-		const genProp = (prop, index) => {
-			return {
-				prop: prop,
-				data: data,
-				index: index,
-				ptr: this.ptr + offset,
-				curPtr: cur.ptr,
-				offset: offset,
-				abort: false,
-				struct: this
-			};
+		const returnValue = (data == null);
+		const ctx = {
+			name: name,
+			abort: false,
+			struct: this
 		};
+		let offset = 0;
 		const fieldTask = (fieldProp, i) => {
 			if(fieldProp.m == null){
 				if(cur.ptr + fieldProp.q > cur.view.byteLength){
-					callProp.abort = true;
+					ctx.abort = true;
 					return;
 				}
 				offset += fieldProp.q;
 				cur.ptr += fieldProp.q;
+				ctx.ptr = this.ptr + offset;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
 				return;
 			}
 			if(typeof fieldProp.m == "number"){
 				if(cur.ptr + fieldProp.q > cur.view.byteLength){
-					callProp.abort = true;
+					ctx.abort = true;
 					return;
 				}
 				const value = cur.view[BinaryStruct.vrm[fieldProp.m]](cur.ptr, ...fieldProp.a);
 				offset += fieldProp.q;
 				cur.ptr += fieldProp.q;
+				ctx.ptr = this.ptr + offset;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
 				if(i == null){
 					data[fieldProp.f] = value;
-					data[fieldProp.f] = handler.set(callProp = genProp(fieldProp.f, i), ...args);
 				}else{
-					data[fieldProp.f].push(value);
-					data[fieldProp.f][i] = handler.set(callProp = genProp(fieldProp.f, i), ...args);
+					data[fieldProp.f][i] = value;
 				}
 				return;
 			}
 			if(fieldProp.m == "buffer"){
-				const len = (typeof fieldProp.q == "number") ? fieldProp.q : handler.get(callProp = genProp(fieldProp.q, i), ...args);
+				const len = (typeof fieldProp.q == "number") ? fieldProp.q : data[fieldProp.q];
 				if(cur.ptr + len > cur.view.byteLength){
-					callProp.abort = true;
+					ctx.abort = true;
 				}
-				if(callProp.abort){
+				if(ctx.abort){
 					return;
 				}
 				const start = cur.view.byteOffset + cur.ptr;
 				const value = cur.view.buffer.slice(start, start + len);
 				offset += len;
 				cur.ptr += len;
+				ctx.ptr = this.ptr + offset;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
 				if(i == null){
 					data[fieldProp.f] = value;
-					data[fieldProp.f] = handler.set(callProp = genProp(fieldProp.f, i), ...args);
 				}else{
-					data[fieldProp.f].push(value);
-					data[fieldProp.f][i] = handler.set(callProp = genProp(fieldProp.f, i), ...args);
+					data[fieldProp.f][i] = value;
 				}
 				return;
 			}
@@ -225,130 +232,105 @@ class BinaryStruct{
 				subObj.currentView = {view: new DataView(subObj.currentBuffer.buffer, start), ptr: 0};
 				subObj.bufferAccess = {first: subObj.currentBuffer, last: subObj.currentBuffer};
 				subObj.$struct = this.$struct;
-				const value = subObj.read(Array.isArray(size.nest[fieldProp.f]) ? size.nest[fieldProp.f][0] : size.nest[fieldProp.f], true);
-				if(value == null){
-					callProp.abort = true;
-					return;
-				}
+				subObj.read(Array.isArray(size.nest[fieldProp.f]) ? size.nest[fieldProp.f][0] : size.nest[fieldProp.f], (i == null) ? data[fieldProp.f] : data[fieldProp.f][i]);
 				offset += subObj.ptr;
 				cur.ptr += subObj.ptr;
-				if(i == null){
-					data[fieldProp.f] = value;
-					data[fieldProp.f] = handler.set(callProp = genProp(fieldProp.f, i), ...args);
-				}else{
-					data[fieldProp.f].push(value);
-					data[fieldProp.f][i] = handler.set(callProp = genProp(fieldProp.f, i), ...args);
-				}
 				return;
 			}
 		};
-		if("startRead" in handler){
-			handler.startRead({
-				prop: null,
-				data: data,
-				index: null,
-				ptr: this.ptr,
-				curPtr: cur.ptr,
-				offset: 0,
-				abort: false,
-				struct: this
-			}, ...args);
+		if(returnValue){
+			data = {};
+		}
+		data[context] = ctx;
+		ctx.index = null;
+		ctx.ptr = this.ptr + offset;
+		ctx.offset = offset;
+		ctx.curPtr = cur.ptr;
+		if(handler in data){
+			data[handler]("startRead");
 		}
 		for(let fieldProp of queue){
+			ctx.index = null;
 			if(fieldProp.t == null){
 				fieldTask(fieldProp, null);
-				if(callProp.abort){
+				if(ctx.abort){
 					break;
 				}
 			}else{
-				const times = (typeof fieldProp.t == "number") ? fieldProp.t : handler.get(callProp = genProp(fieldProp.t, null), ...args);
-				if(callProp.abort){
+				const times = (typeof fieldProp.t == "number") ? fieldProp.t : data[fieldProp.t];
+				if(ctx.abort){
 					break;
 				}
-				data[fieldProp.f] = [];
 				for(let i = 0; i < times; i++){
+					ctx.index = i;
 					fieldTask(fieldProp, i);
-					if(callProp.abort){
+					if(ctx.abort){
 						break;
 					}
 				}
-				if(callProp.abort){
+				if(ctx.abort){
 					break;
 				}
 			}
 		}
-		let val = data;
-		if(callProp.abort){
+		if(ctx.abort){
 			cur.ptr = ptr;
-			if("readFailed" in handler){
-				val = handler.readFailed({
-					prop: null,
-					data: null,
-					index: null,
-					ptr: this.ptr,
-					curPtr: cur.ptr,
-					offset: 0,
-					abort: true,
-					struct: this
-				}, ...args);
-			}else{
-				val = null;
+			if(handler in data){
+				ctx.index = null;
+				ctx.ptr = this.ptr;
+				ctx.offset = 0;
+				ctx.curPtr = cur.ptr;
+				data[handler]("readFailed");
 			}
+			data = null;
 		}else{
 			this.ptr += offset;
-			if("readSucceeded" in handler){
-				val = handler.readSucceeded({
-					prop: null,
-					data: data,
-					index: null,
-					ptr: this.ptr,
-					curPtr: cur.ptr,
-					offset: offset,
-					abort: true,
-					struct: this
-				}, ...args);
+			if(handler in data){
+				ctx.index = null;
+				ctx.ptr = this.ptr;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
+				data[handler]("readSucceeded");
 			}
 		}
-		return returnValue ? val : this;
+		return returnValue ? data : this;
 	}
 	write(name, data = null){
-		const {queue, size, handler, args} = this.$struct[name];
+		const {queue, size, handler, context} = this.$struct[name];
 		const buffer = new ArrayBuffer(this.sizeof(name, data));
 		const cur = {view: new DataView(buffer), ptr: 0};
 		const ptr = cur.ptr;
-		let offset = 0;
-		let callProp = {abort: false};
-		const genProp = (prop, index) => {
-			return {
-				prop: prop,
-				data: data,
-				index: index,
-				ptr: this.ptr + offset,
-				curPtr: cur.ptr,
-				offset: offset,
-				abort: false,
-				struct: this
-			};
+		const ctx = {
+			name: name,
+			abort: false,
+			struct: this
 		};
+		let offset = 0;
 		const fieldTask = (fieldProp, i) => {
 			if(fieldProp.m == null){
 				offset += fieldProp.q;
 				cur.ptr += fieldProp.q;
+				ctx.ptr = this.ptr + offset;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
 				return;
 			}
-			const value = handler.get(callProp = genProp(fieldProp.f, i), ...args);
-			if(callProp.abort){
+			const value = (i == null) ? data[fieldProp.f] : data[fieldProp.f][i];
+			if(ctx.abort){
 				return;
 			}
 			if(typeof fieldProp.m == "number"){
 				cur.view[BinaryStruct.vwm[fieldProp.m]](cur.ptr, value, ...fieldProp.a);
 				offset += fieldProp.q;
 				cur.ptr += fieldProp.q;
+				ctx.ptr = this.ptr + offset;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
 				return;
 			}
 			if(fieldProp.m == "buffer"){
-				const len = (typeof fieldProp.q == "number") ? fieldProp.q : handler.get(callProp = genProp(fieldProp.q, i), ...args);
-				if(callProp.abort){
+				const len = (typeof fieldProp.q == "number") ? fieldProp.q : data[fieldProp.q];
+				if(ctx.abort){
 					return;
 				}
 				const start = cur.view.byteOffset + cur.ptr;
@@ -356,6 +338,9 @@ class BinaryStruct{
 				byteArray.set(new Uint8Array(value, 0, len), 0);
 				offset += len;
 				cur.ptr += len;
+				ctx.ptr = this.ptr + offset;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
 				return;
 			}
 			if(fieldProp.m == "nest"){
@@ -368,53 +353,49 @@ class BinaryStruct{
 				byteArray.set(subArray, 0);
 				offset += subArray.byteLength;
 				cur.ptr += subArray.byteLength;
+				ctx.ptr = this.ptr + offset;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
 				return;
 			}
 		};
-		if("startWrite" in handler){
-			handler.startWrite({
-				prop: null,
-				data: data,
-				index: null,
-				ptr: this.ptr,
-				curPtr: cur.ptr,
-				offset: 0,
-				abort: false,
-				struct: this
-			}, ...args);
+		data[context] = ctx;
+		ctx.index = null;
+		ctx.ptr = this.ptr + offset;
+		ctx.offset = offset;
+		ctx.curPtr = cur.ptr;
+		if(handler in data){
+			data[handler]("startWrite");
 		}
 		for(let fieldProp of queue){
+			ctx.index = null;
 			if(fieldProp.t == null){
 				fieldTask(fieldProp, null);
 			}else{
-				const times = (typeof fieldProp.t == "number") ? fieldProp.t : handler.get(callProp = genProp(fieldProp.t, null), ...args);
-				if(callProp.abort){
+				const times = (typeof fieldProp.t == "number") ? fieldProp.t : data[fieldProp.t];
+				if(ctx.abort){
 					break;
 				}
 				for(let i = 0; i < times; i++){
+					ctx.index = i;
 					fieldTask(fieldProp, i);
-					if(callProp.abort){
+					if(ctx.abort){
 						break;
 					}
 				}
-				if(callProp.abort){
+				if(ctx.abort){
 					break;
 				}
 			}
 		}
-		if(callProp.abort){
+		if(ctx.abort){
 			cur.ptr = ptr;
-			if("writeFailed" in handler){
-				handler.writeFailed({
-					prop: null,
-					data: data,
-					index: null,
-					ptr: this.ptr,
-					curPtr: cur.ptr,
-					offset: 0,
-					abort: true,
-					struct: this
-				}, ...args);
+			if(handler in data){
+				ctx.index = null;
+				ctx.ptr = this.ptr;
+				ctx.offset = 0;
+				ctx.curPtr = cur.ptr;
+				data[handler]("writeFailed");
 			}
 		}else{
 			this.ptr += offset;
@@ -464,102 +445,55 @@ class BinaryStruct{
 					}
 				}
 			}
-			if("writeSucceeded" in handler){
-				handler.writeSucceeded({
-					prop: null,
-					data: data,
-					index: null,
-					ptr: this.ptr,
-					curPtr: cur.ptr,
-					offset: offset,
-					abort: false,
-					struct: this
-				}, ...args);
+			if(handler in data){
+				ctx.index = null;
+				ctx.ptr = this.ptr;
+				ctx.offset = offset;
+				ctx.curPtr = cur.ptr;
+				data[handler]("writeSucceeded");
 			}
 		}
 		return this;
 	}
 	sizeof(name, data = null){
-		const {queue, size, handler, args} = this.$struct[name];
+		const {queue, size, context, handler} = this.$struct[name];
+		const ctx = {
+			name: name,
+			abort: false,
+			struct: this,
+			ptr: this.ptr,
+			curPtr: 0,
+			offset: 0
+		};
 		let len = size.const;
 		for(let variable of size.variables){
+			ctx.index = null;
 			if(Array.isArray(variable)){
-				let n = (typeof variable[0] == "number") ? variable[0] : handler.get({
-					prop: variable[0],
-					data: data,
-					index: index,
-					ptr: this.ptr,
-					curPtr: 0,
-					offset: 0,
-					abort: false,
-					struct: this
-				}, ...args);
+				let n = (typeof variable[0] == "number") ? variable[0] : data[variable[0]];
 				let m = variable.length;
 				for(let i = 0; i < n; i++){
 					let len2 = 1;
+					ctx.index = i;
 					for(let j = 1; j < m; j++){
-						len2 *= (typeof variable[j] == "number") ? variable[j] : handler.get({
-							prop: variable[j],
-							data: data,
-							index: i,
-							ptr: this.ptr,
-							curPtr: 0,
-							offset: 0,
-							abort: false,
-							struct: this
-						}, ...args);
+						len2 *= (typeof variable[j] == "number") ? variable[j] : data[variable[j]];
 					}
 					len += len2;
 				}
 			}else{
-				len += handler.get({
-					prop: variable,
-					data: data,
-					index: null,
-					ptr: this.ptr,
-					curPtr: 0,
-					offset: 0,
-					abort: false,
-					struct: this
-				}, ...args);
+				len += data[variable];
 			}
 		}
 		for(let field in size.nest){
+			ctx.index = null;
 			if(Array.isArray(size.nest[field])){
-				let n = (typeof size.nest[field][1] == "number") ? size.nest[field][1] : handler.get({
-					prop: size.nest[field][1],
-					data: data,
-					index: null,
-					ptr: this.ptr,
-					curPtr: 0,
-					offset: 0,
-					abort: false,
-					struct: this
-				}, ...args);
+				let n = (typeof size.nest[field][1] == "number") ? size.nest[field][1] : data[size.nest[field][1]];
 				for(let i = 0; i < n; i++){
-					const nestData = handler.get({
-						prop: field,
-						data: data,
-						index: i,
-						ptr: this.ptr,
-						curPtr: 0,
-						offset: 0,
-						abort: false,
-						struct: this
-					}, ...args);
+					ctx.index = i;
+					const nestData = data[field][i];
 					len += this.sizeof(size.nest[field][0], nestData);
 				}
 			}else{
-				const nestData = handler.get({
-					prop: field,
-					data: data,
-					index: null,
-					ptr: this.ptr,
-					curPtr: 0,
-					offset: 0,
-					abort: false,
-					struct: this
-				}, ...args);
+				const nestData = data[field];
 				len += this.sizeof(size.nest[field], nestData);
 			}
 		}
